@@ -1,0 +1,11 @@
+Master Rank,Feature Name,Logistic Regression (Abs Coef %),Random Forest (Gini %),Decision Tree (Gini %),Average Significance (%)
+1,perimeter_worst,16.37,29.27,74.94,40.19
+2,concave points_worst,8.39,13.18,12.65,11.41
+3,area_mean,15.78,15.18,0.0,10.32
+4,concave points_mean,8.16,21.81,0.82,10.26
+5,radius_se,20.14,6.42,2.35,9.64
+6,texture_worst,15.12,5.36,3.55,8.01
+7,smoothness_worst,7.52,3.02,2.37,4.3
+8,symmetry_worst,5.93,2.29,0.0,2.74
+9,concave points_se,2.43,2.16,3.31,2.63
+10,smoothness_se,0.16,1.31,0.0,0.49
