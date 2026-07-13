@@ -1,7 +1,9 @@
 import streamlit as st
 import numpy as np
+import pandas as pd
 import pickle
 import os
+import io
 
 # ─────────────────────────────────────────────
 # PAGE CONFIG
@@ -369,7 +371,7 @@ st.markdown("""
 <div class="hero">
     <div class="hero-label">A-FGO · Breast Cancer Detection System</div>
     <div class="hero-title">Morphological Cell Analysis</div>
-    <div class="hero-sub">Enter the 10 A-FGO-optimized morphological features extracted from a fine needle aspirate (FNA) biopsy image to classify the tumor as Benign or Malignant.</div>
+    <div class="hero-sub">Classify fine needle aspirate (FNA) biopsy measurements as Benign or Malignant using A-FGO-optimized features. Run a single manual analysis or upload a full 30-feature WBCD CSV for batch screening.</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -378,116 +380,331 @@ if not MODELS_LOADED:
     st.stop()
 
 # ─────────────────────────────────────────────
-# INPUT FORM
+# ALL WBCD FEATURE NAMES (30 columns, canonical order)
 # ─────────────────────────────────────────────
-st.markdown('<div class="section-label">Cell Morphology Measurements</div>', unsafe_allow_html=True)
-st.markdown(
-    "<div style='font-size:0.8rem;color:#6b7280;margin-bottom:1.2rem'>"
-    "Features are ordered by A-FGO significance rank (most influential first).</div>",
-    unsafe_allow_html=True
-)
+ALL_WBCD_FEATURES = [
+    "radius_mean", "texture_mean", "perimeter_mean", "area_mean", "smoothness_mean",
+    "compactness_mean", "concavity_mean", "concave points_mean", "symmetry_mean", "fractal_dimension_mean",
+    "radius_se", "texture_se", "perimeter_se", "area_se", "smoothness_se",
+    "compactness_se", "concavity_se", "concave points_se", "symmetry_se", "fractal_dimension_se",
+    "radius_worst", "texture_worst", "perimeter_worst", "area_worst", "smoothness_worst",
+    "compactness_worst", "concavity_worst", "concave points_worst", "symmetry_worst", "fractal_dimension_worst",
+]
 
-input_values = {}
+def run_batch_prediction(df_raw, model, scaler, selected_indices, total_features):
+    """
+    Accepts a raw 30-column WBCD dataframe.
+    Drops non-feature columns (id, diagnosis, Unnamed: 32) if present,
+    builds the full 30-feature matrix, scales it, then slices the
+    A-FGO selected columns for inference.
+    """
+    drop_cols = [c for c in ["id", "diagnosis", "Unnamed: 32"] if c in df_raw.columns]
+    label_col = df_raw["diagnosis"].copy() if "diagnosis" in df_raw.columns else None
+    df = df_raw.drop(columns=drop_cols)
 
-col1, col2 = st.columns(2)
-for i, fname in enumerate(FEATURE_RANK_ORDER):
-    m = FEATURE_META[fname]
-    target_col = col1 if i % 2 == 0 else col2
-    with target_col:
-        val = st.number_input(
-            label=f"#{i+1} · {m['label']}",
-            min_value=float(m["min"]),
-            max_value=float(m["max"]),
-            value=float(m["default"]),
-            step=float(m["step"]),
-            format="%.4f" if m["step"] < 0.01 else "%.2f",
-            help=m["help"],
-            key=fname,
-        )
-        input_values[fname] = val
+    # Validate columns
+    missing = [c for c in ALL_WBCD_FEATURES if c not in df.columns]
+    if missing:
+        return None, None, None, f"Missing required columns: {missing}"
 
-st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+    # Reorder to canonical WBCD order and fill NaNs with column mean
+    X_raw = df[ALL_WBCD_FEATURES].copy()
+    if X_raw.isnull().any().any():
+        X_raw = X_raw.fillna(X_raw.mean())
+
+    X_scaled = scaler.transform(X_raw.values)
+    X_selected = X_scaled[:, selected_indices]
+
+    preds = model.predict(X_selected)
+    probas = model.predict_proba(X_selected)
+
+    return preds, probas, label_col, None
 
 # ─────────────────────────────────────────────
-# PREDICTION
+# TABS
 # ─────────────────────────────────────────────
-predict_btn = st.button("Run Diagnosis", use_container_width=True, type="primary")
+tab_manual, tab_batch = st.tabs(["🔬  Single Analysis", "📂  Batch CSV Analysis"])
 
-if predict_btn:
-    # Build full 30-feature vector (zeros for non-selected features)
-    full_vector = np.zeros((1, total_features))
-    for fname, val in input_values.items():
-        idx = selected_names.index(fname)
-        full_col = selected_indices[idx]
-        full_vector[0, full_col] = val
+# ══════════════════════════════════════════════
+# TAB 1 — MANUAL INPUT
+# ══════════════════════════════════════════════
+with tab_manual:
+    st.markdown('<div class="section-label">Cell Morphology Measurements</div>', unsafe_allow_html=True)
+    st.markdown(
+        "<div style='font-size:0.8rem;color:#6b7280;margin-bottom:1.2rem'>"
+        "Features are ordered by A-FGO significance rank (most influential first).</div>",
+        unsafe_allow_html=True
+    )
 
-    # Scale using fitted scaler
-    full_scaled = scaler.transform(full_vector)
+    input_values = {}
 
-    # Extract only the selected feature columns
-    X_input = full_scaled[:, selected_indices]
-
-    # Select model
-    model_map = {"Logistic Regression": lr_model, "Random Forest": rf_model, "Decision Tree": dt_model}
-    model = model_map[chosen_model_name]
-
-    prediction = model.predict(X_input)[0]
-    probabilities = model.predict_proba(X_input)[0]
-
-    prob_benign = probabilities[0]
-    prob_malignant = probabilities[1]
-
-    if prediction == 1:
-        st.markdown(f"""
-        <div class="result-card result-malignant">
-            <div class="result-title">Tumor Classification Result</div>
-            <div class="result-diagnosis">⚠ MALIGNANT</div>
-            <div style="color:#fca5a5;font-size:0.88rem;font-weight:500">The morphological profile is consistent with a malignant tumor.</div>
-            <div style="margin-top:1rem">
-                <div class="prob-row"><span class="prob-label">Malignant probability</span><span style="color:#f87171;font-weight:600">{prob_malignant*100:.1f}%</span></div>
-                <div class="prob-row"><span class="prob-label">Benign probability</span><span>{prob_benign*100:.1f}%</span></div>
-            </div>
-            <div class="result-note">⚕ This result is for research and educational purposes only. Clinical diagnosis must be confirmed by a qualified medical professional.</div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="result-card result-benign">
-            <div class="result-title">Tumor Classification Result</div>
-            <div class="result-diagnosis">✓ BENIGN</div>
-            <div style="color:#86efac;font-size:0.88rem;font-weight:500">The morphological profile is consistent with a benign tumor.</div>
-            <div style="margin-top:1rem">
-                <div class="prob-row"><span class="prob-label">Benign probability</span><span style="color:#4ade80;font-weight:600">{prob_benign*100:.1f}%</span></div>
-                <div class="prob-row"><span class="prob-label">Malignant probability</span><span>{prob_malignant*100:.1f}%</span></div>
-            </div>
-            <div class="result-note">⚕ This result is for research and educational purposes only. Clinical diagnosis must be confirmed by a qualified medical professional.</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Feature contribution summary
-    st.markdown("<div class='section-label' style='margin-top:1.8rem'>Input Summary</div>", unsafe_allow_html=True)
-    summary_rows = ""
+    col1, col2 = st.columns(2)
     for i, fname in enumerate(FEATURE_RANK_ORDER):
         m = FEATURE_META[fname]
-        val = input_values[fname]
-        summary_rows += f"""
-        <tr>
-            <td style="color:#6b7280;padding:0.3rem 0.8rem 0.3rem 0;font-size:0.78rem">#{i+1}</td>
-            <td style="color:#d1d5db;padding:0.3rem 0.8rem;font-size:0.8rem">{m['label']}</td>
-            <td style="color:#7eb8f7;font-family:'JetBrains Mono',monospace;font-size:0.78rem;text-align:right;padding:0.3rem 0 0.3rem 0.8rem">{val:.4f}</td>
-        </tr>"""
-    st.markdown(f"""
-    <table style="width:100%;border-collapse:collapse;margin-top:0.5rem">
-        <thead>
-            <tr style="border-bottom:1px solid #1e2535">
-                <th style="color:#4b5563;font-size:0.72rem;text-align:left;padding-bottom:0.4rem">Rank</th>
-                <th style="color:#4b5563;font-size:0.72rem;text-align:left;padding-bottom:0.4rem">Feature</th>
-                <th style="color:#4b5563;font-size:0.72rem;text-align:right;padding-bottom:0.4rem">Value</th>
-            </tr>
-        </thead>
-        <tbody>{summary_rows}</tbody>
-    </table>
+        target_col = col1 if i % 2 == 0 else col2
+        with target_col:
+            val = st.number_input(
+                label=f"#{i+1} · {m['label']}",
+                min_value=float(m["min"]),
+                max_value=float(m["max"]),
+                value=float(m["default"]),
+                step=float(m["step"]),
+                format="%.4f" if m["step"] < 0.01 else "%.2f",
+                help=m["help"],
+                key=fname,
+            )
+            input_values[fname] = val
+
+    st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────
+    # SINGLE PREDICTION
+    # ─────────────────────────────────────────────
+    predict_btn = st.button("Run Diagnosis", use_container_width=True, type="primary")
+
+    if predict_btn:
+        # Build full 30-feature vector (zeros for non-selected features)
+        full_vector = np.zeros((1, total_features))
+        for fname, val in input_values.items():
+            idx = selected_names.index(fname)
+            full_col = selected_indices[idx]
+            full_vector[0, full_col] = val
+
+        # Scale using fitted scaler
+        full_scaled = scaler.transform(full_vector)
+
+        # Extract only the selected feature columns
+        X_input = full_scaled[:, selected_indices]
+
+        # Select model
+        model_map = {"Logistic Regression": lr_model, "Random Forest": rf_model, "Decision Tree": dt_model}
+        model = model_map[chosen_model_name]
+
+        prediction = model.predict(X_input)[0]
+        probabilities = model.predict_proba(X_input)[0]
+
+        prob_benign = probabilities[0]
+        prob_malignant = probabilities[1]
+
+        if prediction == 1:
+            st.markdown(f"""
+            <div class="result-card result-malignant">
+                <div class="result-title">Tumor Classification Result</div>
+                <div class="result-diagnosis">⚠ MALIGNANT</div>
+                <div style="color:#fca5a5;font-size:0.88rem;font-weight:500">The morphological profile is consistent with a malignant tumor.</div>
+                <div style="margin-top:1rem">
+                    <div class="prob-row"><span class="prob-label">Malignant probability</span><span style="color:#f87171;font-weight:600">{prob_malignant*100:.1f}%</span></div>
+                    <div class="prob-row"><span class="prob-label">Benign probability</span><span>{prob_benign*100:.1f}%</span></div>
+                </div>
+                <div class="result-note">⚕ This result is for research and educational purposes only. Clinical diagnosis must be confirmed by a qualified medical professional.</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="result-card result-benign">
+                <div class="result-title">Tumor Classification Result</div>
+                <div class="result-diagnosis">✓ BENIGN</div>
+                <div style="color:#86efac;font-size:0.88rem;font-weight:500">The morphological profile is consistent with a benign tumor.</div>
+                <div style="margin-top:1rem">
+                    <div class="prob-row"><span class="prob-label">Benign probability</span><span style="color:#4ade80;font-weight:600">{prob_benign*100:.1f}%</span></div>
+                    <div class="prob-row"><span class="prob-label">Malignant probability</span><span>{prob_malignant*100:.1f}%</span></div>
+                </div>
+                <div class="result-note">⚕ This result is for research and educational purposes only. Clinical diagnosis must be confirmed by a qualified medical professional.</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Feature contribution summary
+        st.markdown("<div class='section-label' style='margin-top:1.8rem'>Input Summary</div>", unsafe_allow_html=True)
+        summary_rows = ""
+        for i, fname in enumerate(FEATURE_RANK_ORDER):
+            m = FEATURE_META[fname]
+            val = input_values[fname]
+            summary_rows += f"""
+            <tr>
+                <td style="color:#6b7280;padding:0.3rem 0.8rem 0.3rem 0;font-size:0.78rem">#{i+1}</td>
+                <td style="color:#d1d5db;padding:0.3rem 0.8rem;font-size:0.8rem">{m['label']}</td>
+                <td style="color:#7eb8f7;font-family:'JetBrains Mono',monospace;font-size:0.78rem;text-align:right;padding:0.3rem 0 0.3rem 0.8rem">{val:.4f}</td>
+            </tr>"""
+        st.markdown(f"""
+        <table style="width:100%;border-collapse:collapse;margin-top:0.5rem">
+            <thead>
+                <tr style="border-bottom:1px solid #1e2535">
+                    <th style="color:#4b5563;font-size:0.72rem;text-align:left;padding-bottom:0.4rem">Rank</th>
+                    <th style="color:#4b5563;font-size:0.72rem;text-align:left;padding-bottom:0.4rem">Feature</th>
+                    <th style="color:#4b5563;font-size:0.72rem;text-align:right;padding-bottom:0.4rem">Value</th>
+                </tr>
+            </thead>
+            <tbody>{summary_rows}</tbody>
+        </table>
+        """, unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════
+# TAB 2 — BATCH CSV ANALYSIS
+# ══════════════════════════════════════════════
+with tab_batch:
+    st.markdown('<div class="section-label">Batch CSV Analysis</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div style="font-size:0.82rem;color:#6b7280;line-height:1.7;margin-bottom:1.2rem">
+        Upload a CSV containing the full 30 WBCD feature columns. The system will automatically
+        extract the 10 A-FGO features, apply the trained scaler, and classify each row.
+        Columns like <code style="color:#7eb8f7;background:#1e2535;padding:0.1rem 0.3rem;border-radius:3px">id</code>,
+        <code style="color:#7eb8f7;background:#1e2535;padding:0.1rem 0.3rem;border-radius:3px">diagnosis</code>, and
+        <code style="color:#7eb8f7;background:#1e2535;padding:0.1rem 0.3rem;border-radius:3px">Unnamed: 32</code>
+        are ignored automatically if present.
+    </div>
     """, unsafe_allow_html=True)
+
+    uploaded_file = st.file_uploader(
+        "Drop your CSV here or click to browse",
+        type=["csv"],
+        help="Must contain the 30 standard WBCD feature columns. Extra columns (id, diagnosis) are handled automatically.",
+    )
+
+    if uploaded_file is not None:
+        try:
+            df_raw = pd.read_csv(uploaded_file)
+        except Exception as e:
+            st.error(f"Could not read CSV: {e}")
+            st.stop()
+
+        # Preview uploaded file
+        st.markdown(f"""
+        <div style="background:#1a2030;border:1px solid #1e3050;border-radius:8px;
+                    padding:0.7rem 1rem;margin:0.8rem 0;font-size:0.8rem;color:#8090a8">
+            📄 <span style="color:#e8eaf0;font-weight:500">{uploaded_file.name}</span>
+            &nbsp;·&nbsp; {len(df_raw):,} rows &nbsp;·&nbsp; {df_raw.shape[1]} columns detected
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.expander("Preview uploaded data (first 5 rows)", expanded=False):
+            st.dataframe(df_raw.head(), use_container_width=True)
+
+        st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+
+        run_batch_btn = st.button("Run Batch Analysis", use_container_width=True, type="primary", key="batch_btn")
+
+        if run_batch_btn:
+            model_map = {"Logistic Regression": lr_model, "Random Forest": rf_model, "Decision Tree": dt_model}
+            model = model_map[chosen_model_name]
+
+            with st.spinner("Running A-FGO pipeline on all rows..."):
+                preds, probas, label_col, error = run_batch_prediction(
+                    df_raw, model, scaler, selected_indices, total_features
+                )
+
+            if error:
+                st.error(f"⚠️ {error}")
+            else:
+                # ── Summary metrics ──────────────────────────────
+                n_total = len(preds)
+                n_malignant = int(np.sum(preds == 1))
+                n_benign = int(np.sum(preds == 0))
+                pct_m = n_malignant / n_total * 100
+                pct_b = n_benign / n_total * 100
+
+                # Ground truth accuracy if diagnosis column was present
+                accuracy_block = ""
+                if label_col is not None:
+                    gt = label_col.map({"M": 1, "B": 0}).values if label_col.dtype == object else label_col.values
+                    correct = int(np.sum(preds == gt))
+                    acc = correct / n_total * 100
+                    accuracy_block = f"""
+                    <div style="margin-top:0.8rem;padding-top:0.8rem;border-top:1px solid #1e2535">
+                        <div style="font-size:0.72rem;color:#6b7280;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.3rem">vs Ground Truth Labels</div>
+                        <div style="font-size:1.5rem;font-weight:700;color:#7eb8f7">{acc:.2f}%
+                            <span style="font-size:0.8rem;font-weight:400;color:#6b7280"> accuracy &nbsp;({correct}/{n_total} correct)</span>
+                        </div>
+                    </div>"""
+
+                st.markdown(f"""
+                <div style="background:#1a2030;border:1px solid #1e3050;border-radius:10px;
+                            padding:1.2rem 1.5rem;margin:1rem 0">
+                    <div style="font-size:0.72rem;color:#7eb8f7;font-weight:600;letter-spacing:0.1em;
+                                text-transform:uppercase;margin-bottom:0.8rem">Batch Analysis Summary · {chosen_model_name}</div>
+                    <div style="display:flex;gap:2rem;flex-wrap:wrap">
+                        <div>
+                            <div style="font-size:0.72rem;color:#6b7280;margin-bottom:0.2rem">Total Samples</div>
+                            <div style="font-size:1.6rem;font-weight:700;color:#e8eaf0">{n_total:,}</div>
+                        </div>
+                        <div>
+                            <div style="font-size:0.72rem;color:#6b7280;margin-bottom:0.2rem">Benign</div>
+                            <div style="font-size:1.6rem;font-weight:700;color:#4ade80">{n_benign:,}
+                                <span style="font-size:0.8rem;font-weight:400;color:#6b7280"> ({pct_b:.1f}%)</span>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="font-size:0.72rem;color:#6b7280;margin-bottom:0.2rem">Malignant</div>
+                            <div style="font-size:1.6rem;font-weight:700;color:#f87171">{n_malignant:,}
+                                <span style="font-size:0.8rem;font-weight:400;color:#6b7280"> ({pct_m:.1f}%)</span>
+                            </div>
+                        </div>
+                    </div>
+                    {accuracy_block}
+                </div>
+                """, unsafe_allow_html=True)
+
+                # ── Build results dataframe ──────────────────────
+                results_df = df_raw.copy()
+
+                # Add id column if not present
+                if "id" not in results_df.columns:
+                    results_df.insert(0, "id", range(1, len(results_df) + 1))
+
+                results_df["A_FGO_Prediction"] = ["MALIGNANT" if p == 1 else "BENIGN" for p in preds]
+                results_df["Prob_Benign (%)"] = np.round(probas[:, 0] * 100, 2)
+                results_df["Prob_Malignant (%)"] = np.round(probas[:, 1] * 100, 2)
+
+                # ── Results table (styled) ───────────────────────
+                st.markdown('<div class="section-label" style="margin-top:1.5rem">Per-Row Results</div>', unsafe_allow_html=True)
+
+                display_cols = ["id", "A_FGO_Prediction", "Prob_Benign (%)", "Prob_Malignant (%)"]
+                if "diagnosis" in results_df.columns:
+                    display_cols.insert(2, "diagnosis")
+
+                display_df = results_df[display_cols].copy()
+
+                def color_prediction(val):
+                    if val == "MALIGNANT":
+                        return "color: #f87171; font-weight: 600"
+                    elif val == "BENIGN":
+                        return "color: #4ade80; font-weight: 600"
+                    return ""
+
+                styled = display_df.style.applymap(color_prediction, subset=["A_FGO_Prediction"])
+                st.dataframe(styled, use_container_width=True, height=380)
+
+                # ── Download button ──────────────────────────────
+                csv_out = results_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="⬇ Download Full Results CSV",
+                    data=csv_out,
+                    file_name=f"afgo_batch_results_{chosen_model_name.lower().replace(' ', '_')}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+                st.markdown("""
+                <div style="font-size:0.75rem;color:#4b5563;margin-top:0.6rem;text-align:center">
+                    Downloaded CSV contains all original columns plus A_FGO_Prediction, Prob_Benign (%), and Prob_Malignant (%).
+                </div>
+                """, unsafe_allow_html=True)
+
+    else:
+        # Empty state guidance
+        st.markdown("""
+        <div style="border:1px dashed #2d3748;border-radius:10px;padding:2rem;text-align:center;margin-top:0.5rem">
+            <div style="font-size:2rem;margin-bottom:0.6rem">📂</div>
+            <div style="color:#6b7280;font-size:0.85rem;line-height:1.7">
+                Upload a CSV with the full 30 WBCD feature columns.<br>
+                The A-FGO pipeline will extract the correct 10 features, apply scaling, and return predictions for every row.<br><br>
+                <span style="color:#4b5563;font-size:0.78rem">
+                    Expected columns include: <code style="color:#7eb8f7;background:#1e2535;padding:0.1rem 0.3rem;border-radius:3px">radius_mean</code>,
+                    <code style="color:#7eb8f7;background:#1e2535;padding:0.1rem 0.3rem;border-radius:3px">texture_mean</code>,
+                    <code style="color:#7eb8f7;background:#1e2535;padding:0.1rem 0.3rem;border-radius:3px">perimeter_mean</code> … and all remaining WBCD features.
+                </span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # DISCLAIMER
