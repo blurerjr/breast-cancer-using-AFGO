@@ -285,8 +285,8 @@ with st.sidebar:
 st.markdown("""
 <div class="hero">
     <div class="hero-label">A-FGO · Breast Cancer Detection System</div>
-    <div class="hero-title">Morphological Cell Analysis</div>
-    <div class="hero-sub">Classify fine needle aspirate (FNA) biopsy measurements as Benign or Malignant using A-FGO-optimized features. Run a single manual analysis or upload a full 30-feature WBCD CSV for batch screening.</div>
+    <div class="hero-title">Breast Cancer Detection and Cell Analysis</div>
+    <div class="hero-sub">Classify breast cancer featues  as Benign or Malignant using A-FGO-optimized features. Run a single manual analysis or upload a full 30-feature WBCD CSV for batch screening.</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -303,7 +303,7 @@ tab_manual, tab_batch = st.tabs(["🔬  Single Analysis", "📂  Batch CSV Analy
 # TAB 1 — SINGLE MANUAL INPUT
 # ══════════════════════════════════════════════
 with tab_manual:
-    st.markdown('<div class="section-label">Cell Morphology Measurements</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">Cell Features Measurements</div>', unsafe_allow_html=True)
     st.markdown("<div style='font-size:0.8rem;color:#4b5563;margin-bottom:1.2rem'>Features ordered by A-FGO significance rank — most influential first.</div>", unsafe_allow_html=True)
 
     input_values = {}
@@ -344,7 +344,7 @@ with tab_manual:
             <div class="result-card result-malignant">
                 <div class="result-title">Tumor Classification Result</div>
                 <div class="result-diagnosis">⚠ MALIGNANT</div>
-                <div style="color:#b91c1c;font-size:0.88rem;font-weight:500">The morphological profile is consistent with a malignant tumor.</div>
+                <div style="color:#b91c1c;font-size:0.88rem;font-weight:500">The features profile is consistent with a malignant tumor.</div>
                 <div style="margin-top:1rem">
                     <div class="prob-row"><span class="prob-label">Malignant probability</span><span style="color:#dc2626;font-weight:700">{prob_m*100:.1f}%</span></div>
                     <div class="prob-row"><span class="prob-label">Benign probability</span><span style="color:#374151">{prob_b*100:.1f}%</span></div>
@@ -357,7 +357,7 @@ with tab_manual:
             <div class="result-card result-benign">
                 <div class="result-title">Tumor Classification Result</div>
                 <div class="result-diagnosis">✓ BENIGN</div>
-                <div style="color:#15803d;font-size:0.88rem;font-weight:500">The morphological profile is consistent with a benign tumor.</div>
+                <div style="color:#15803d;font-size:0.88rem;font-weight:500">The features profile is consistent with a benign tumor.</div>
                 <div style="margin-top:1rem">
                     <div class="prob-row"><span class="prob-label">Benign probability</span><span style="color:#16a34a;font-weight:700">{prob_b*100:.1f}%</span></div>
                     <div class="prob-row"><span class="prob-label">Malignant probability</span><span style="color:#374151">{prob_m*100:.1f}%</span></div>
